@@ -108,6 +108,10 @@
 - **对话能力**：MT-Bench、Chatbot Arena
 - **评估方法**：LLM-as-Judge、Red Teaming（对抗测试）
 
+## 深度学习文档
+
+- 📖 [LLM 完整技术栈深度解析](./LLM完整技术栈深度解析.md) — 系统深入讲解 Transformer 架构演进、预训练、微调技术、推理部署、评估体系五大板块，含面试重点标注
+
 ## 学习路线建议
 
 1. 理解 Transformer 架构与注意力机制
