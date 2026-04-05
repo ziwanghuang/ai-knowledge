@@ -1591,3 +1591,1412 @@ Level 3: 回归评估（定期执行）
 ### 学习课程
 - [DeepLearning.AI - Building and Evaluating Advanced RAG](https://www.deeplearning.ai/short-courses/)
 - [LangChain Academy - Introduction to LangGraph](https://academy.langchain.com/)
+
+
+---
+
+## 八、高级 RAG 架构模式
+
+> 💡 **面试加分区**：了解不同 RAG 变体的设计动机和适用场景。
+
+### 8.1 RAG 演进三代架构 🔴
+
+```
+Naive RAG (第一代):
+═══════════════════
+  Query → Embed → Vector Search → Top-K Chunks → LLM → Answer
+
+  问题:
+  1. 检索质量差 (语义鸿沟、文档不完整)
+  2. 检索结果冗余/不相关
+  3. LLM 被噪声上下文误导
+  4. 无法处理复杂多步查询
+
+Advanced RAG (第二代):
+═══════════════════════
+  Pre-Retrieval 优化:
+    Query Rewrite → HyDE → Multi-Query
+  Retrieval 优化:
+    Hybrid Search → Re-Ranking → Recursive Retrieval
+  Post-Retrieval 优化:
+    Context Compression → Lost-in-Middle 重排 → Citation
+
+  ┌──────────────────────────────────────────────────┐
+  │                Advanced RAG 流程                   │
+  │                                                    │
+  │  Query → Query Rewrite → Hybrid Search            │
+  │                              │                     │
+  │                         Re-Ranking                 │
+  │                              │                     │
+  │                    Context Compression              │
+  │                              │                     │
+  │                     LLM Generation                  │
+  │                              │                     │
+  │                    Citation Extraction               │
+  └──────────────────────────────────────────────────┘
+
+Modular RAG (第三代):
+═════════════════════
+  将 RAG 拆分为可插拔模块，按需组合:
+
+  ┌─────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+  │ Routing │→│Retrieval │→│Processing│→│Generation│
+  │ Module  │ │ Module   │ │ Module   │ │ Module   │
+  └─────────┘ └──────────┘ └──────────┘ └──────────┘
+       │            │            │            │
+  意图识别      多源检索      重排/压缩     带引用生成
+  路由策略      自适应检索    知识融合     结构化输出
+
+  代表: LangGraph Agentic RAG, LlamaIndex Router
+```
+
+### 8.2 Self-RAG 🟡
+
+```
+Self-RAG 核心思想:
+══════════════════
+模型自己决定是否需要检索、检索到的内容是否有用、生成的答案是否忠实
+
+  Query → LLM 判断 [Retrieve] →  是: 执行检索 → 评估相关性
+                               │   [IsRel] token
+                               │
+                               └  否: 直接生成
+
+  检索后:
+  对每个检索片段分别生成答案 → 自我评分:
+    [IsSup] → 答案是否被证据支持？ (忠实度)
+    [IsUse] → 答案是否对用户有用？ (有用性)
+  选择最高分的答案输出
+
+特殊 Token:
+  [Retrieve] = yes/no     → 是否需要检索
+  [IsRel]    = yes/no     → 检索结果是否相关
+  [IsSup]    = fully/partially/no → 答案支持度
+  [IsUse]    = 1-5        → 有用性评分
+
+训练:
+  用 GPT-4 标注反思 token → 训练 7B/13B 模型内化这些判断能力
+
+优势:
+  - 减少不必要的检索 (省成本)
+  - 内置幻觉检测
+  - 可控的质量-速度权衡
+```
+
+### 8.3 Graph RAG 🟡
+
+```
+Graph RAG (Microsoft):
+════════════════════════
+
+Naive RAG 的局限:
+  "公司今年有哪些重要战略变化？"
+  → 向量检索找不到直接回答这个问题的片段
+  → 信息分散在数百个文档片段中
+
+Graph RAG 方案:
+
+  离线索引阶段:
+  ┌─────────────────────────────────────────────┐
+  │ Documents → Entity Extraction (LLM)          │
+  │     → Entity Resolution (去重合并)            │
+  │         → Relationship Extraction             │
+  │             → Knowledge Graph 构建            │
+  │                 → Community Detection          │
+  │                     → Community Summaries      │
+  └─────────────────────────────────────────────┘
+
+  在线查询阶段:
+  Global Search: 查询所有 Community Summary → Map-Reduce 汇总
+  Local Search:  查询相关实体 → 扩展邻居 → 生成答案
+
+适用场景:
+  - 全局摘要类问题 (What are the main themes?)
+  - 跨文档推理
+  - 实体关系密集的领域 (金融/医疗/法律)
+
+成本:
+  - 索引时需要大量 LLM 调用 (实体抽取)
+  - 图存储和维护复杂度
+  → 比标准 RAG 贵 5-10×
+```
+
+### 8.4 Agentic RAG 🔴
+
+```
+Agentic RAG = RAG + Agent 循环:
+═══════════════════════════════
+
+  ┌─── Agent Loop ────────────────────────────┐
+  │                                            │
+  │  Query → 意图分析 → 制定检索计划           │
+  │                        │                   │
+  │              ┌─────────┼─────────┐         │
+  │              ▼         ▼         ▼         │
+  │          向量检索    SQL查询    API调用     │
+  │              │         │         │         │
+  │              └─────────┼─────────┘         │
+  │                        ▼                   │
+  │              评估检索结果质量               │
+  │                  │        │                │
+  │              足够好    不够好               │
+  │                  │        │                │
+  │              生成答案   重新检索 ──────────│──→ 回到检索
+  │                  │       (最多 3 轮)       │
+  │              验证答案                      │
+  │                  │                         │
+  │              输出 + 引用                   │
+  └────────────────────────────────────────────┘
+
+LangGraph 实现核心:
+  - StateGraph: 维护查询状态、检索历史、生成结果
+  - Router Node: 按查询类型路由到不同检索源
+  - Grader Node: 评估检索相关性和答案质量
+  - Retry Edge: 不满意时触发重试，带不同策略
+```
+
+### 8.5 CRAG (Corrective RAG) 🟡
+
+```
+CRAG 核心流程:
+══════════════
+
+  Query → 检索 → 相关性评估
+                    │
+           ┌────────┼────────┐
+           ▼        ▼        ▼
+        Correct  Ambiguous  Incorrect
+           │        │        │
+        精炼文档  补充检索   Web 搜索
+           │    (混合源)      │
+           └────────┼────────┘
+                    ▼
+               知识精炼
+                    │
+               LLM 生成
+
+关键创新:
+  1. 检索评估器: 轻量分类器判断检索质量
+  2. 知识精炼: 分解文档为知识条，过滤无关部分
+  3. Web 搜索补充: 检索不够时 fallback 到互联网
+```
+
+
+---
+
+## 九、检索优化深度技巧
+
+### 9.1 Query 优化技术全景 🔴
+
+```
+Query 优化分类:
+═══════════════
+
+1. Query Rewriting (查询重写)
+   用户原始查询 → LLM 改写为更适合检索的查询
+
+   示例:
+   用户: "那个开源的向量数据库，中国公司做的，叫什么？"
+   改写: "中国公司开发的开源向量数据库 Milvus Zilliz"
+
+2. HyDE (Hypothetical Document Embeddings)
+   用 LLM 生成一个"假设性答案" → 用假设答案去检索
+   
+   原理: 假设答案与真实文档的语义空间更接近
+         比 query 与 document 之间的语义鸿沟更小
+   
+   Query → LLM 生成假设答案 → Embed(假设答案) → 检索
+   
+   注意: 如果 LLM 生成的假设答案方向完全错误
+         → 检索反而更差
+         → 适合领域内问题，不适合完全未知领域
+
+3. Multi-Query (多查询扩展)
+   一个用户查询 → 生成 3-5 个不同角度的子查询
+   分别检索 → 结果取并集 → 去重 → Re-Rank
+   
+   示例:
+   用户: "如何优化 RAG 系统？"
+   子查询:
+     - "RAG 检索质量提升方法"
+     - "RAG 生成答案准确性优化"
+     - "RAG 系统延迟降低策略"
+     - "RAG 文档分块最佳实践"
+
+4. Step-Back Prompting
+   具体问题 → 退后一步，问更抽象的问题
+   → 检索更广泛的背景知识
+   → 再回答具体问题
+   
+   示例:
+   具体: "LLaMA-3 用了什么位置编码？"
+   退后: "现代大语言模型常用的位置编码方案有哪些？"
+```
+
+### 9.2 Re-Ranking 深度解析 🔴
+
+```
+为什么需要 Re-Ranking？
+═══════════════════════
+
+向量检索 (Bi-Encoder):
+  速度: 毫秒级 (ANN 近似搜索)
+  精度: 中等 (独立编码 Q 和 D，交互不足)
+
+Re-Ranking (Cross-Encoder):
+  速度: 较慢 (需要 Q-D pair 逐个评分)
+  精度: 高 (Q 和 D 联合编码，深度交互)
+
+两阶段检索:
+  ┌──────────────────────────────────────────────────┐
+  │ Stage 1: Bi-Encoder 粗排                         │
+  │   100万文档 → Top-100                            │
+  │   速度: 10ms (向量 ANN)                          │
+  │                                                    │
+  │ Stage 2: Cross-Encoder 精排                       │
+  │   Top-100 → Top-5                                 │
+  │   速度: 50-100ms (逐对评分)                      │
+  │                                                    │
+  │ 总计: ~100ms，精度接近 Cross-Encoder 全量排序     │
+  └──────────────────────────────────────────────────┘
+
+常用 Re-Ranker:
+  - Cohere Rerank (API, 效果最好)
+  - BGE-Reranker-v2-m3 (开源, 中英文)
+  - cross-encoder/ms-marco (开源, 英文)
+  - Jina Reranker v2 (开源, 多语言)
+```
+
+### 9.3 混合检索策略 🔴
+
+```
+Hybrid Search = 向量检索 + 关键词检索
+═══════════════════════════════════════
+
+为什么需要混合？
+  向量检索: 语义相似性好，但对精确关键词差
+    例: 搜 "Error Code 404" → 可能返回 "HTTP 状态码" 的语义相关内容
+         但不会精确匹配 "404"
+  
+  关键词检索 (BM25): 精确匹配好，但不理解语义
+    例: 搜 "如何修复内存泄漏" → 不会匹配 "memory leak 解决方案"
+
+  混合: 两者互补!
+
+融合策略:
+  ┌─────────────────────────────────────────────────┐
+  │ 方法 1: RRF (Reciprocal Rank Fusion)            │
+  │                                                   │
+  │   score(d) = Σ 1 / (k + rank_i(d))              │
+  │   k = 60 (常数)                                  │
+  │   rank_i(d) = 文档 d 在第 i 个检索器中的排名    │
+  │                                                   │
+  │   优点: 简单，不需要训练                          │
+  │   缺点: 无法学习最优权重                          │
+  │                                                   │
+  │ 方法 2: 线性加权                                 │
+  │   score = α·vector_score + (1-α)·bm25_score      │
+  │   α = 0.5-0.7 (通常向量权重高一点)               │
+  │                                                   │
+  │ 方法 3: Cross-Encoder Re-Ranking                  │
+  │   两个检索器结果取并集 → Cross-Encoder 统一排序   │
+  │   效果最好，但需要额外计算                        │
+  └─────────────────────────────────────────────────┘
+```
+
+### 9.4 多模态 RAG 🟢
+
+```
+多模态 RAG 处理非文本内容:
+═══════════════════════════
+
+  ┌──────────────────────────────────────────┐
+  │ 输入文档类型:                             │
+  │  PDF (含表格/图片) → 版面分析 + OCR       │
+  │  PPT → 幻灯片解析 + 图片描述             │
+  │  视频 → 关键帧提取 + 语音转录            │
+  │  图片 → CLIP/SigLIP 编码                 │
+  └──────────┬───────────────────────────────┘
+             │
+  ┌──────────▼───────────────────────────────┐
+  │ 索引方案:                                │
+  │  文本 → 文本 Embedding                   │
+  │  图片 → CLIP Embedding 或 VLM 描述后编码 │
+  │  表格 → 结构化提取 + 文本化              │
+  └──────────┬───────────────────────────────┘
+             │
+  ┌──────────▼───────────────────────────────┐
+  │ 检索:                                    │
+  │  文本查询 → 同时检索文本和图片           │
+  │  图片查询 → 跨模态检索                   │
+  └──────────┬───────────────────────────────┘
+             │
+  ┌──────────▼───────────────────────────────┐
+  │ 生成:                                    │
+  │  VLM (如 GPT-4o) 处理图文混合上下文      │
+  └──────────────────────────────────────────┘
+
+ColPali 方案:
+  不做文档解析！直接用 VLM 编码文档页面截图
+  Query → 文本 Embedding → 与页面 Embedding 匹配
+  → 简化流水线，特别适合版面复杂的 PDF
+```
+
+---
+
+## 十、Embedding 模型进阶
+
+### 10.1 Embedding 模型训练方法 🟡
+
+```
+训练流程:
+═════════
+
+Stage 1: 对比学习预训练 (Contrastive Learning)
+  数据: (query, positive_doc) 对
+  损失: InfoNCE Loss
+    L = -log(exp(sim(q,d+)/τ) / Σ exp(sim(q,d_i)/τ))
+    τ = temperature (通常 0.02-0.05)
+  
+  正样本构造:
+    - 标题-正文对
+    - 问题-答案对
+    - 同一文档的不同段落
+  
+  Hard Negative Mining:
+    - BM25 Top-K 但不是正样本的 → 困难负样本
+    - 同 batch 内其他正样本作为 In-Batch Negative
+
+Stage 2: 指令微调 (Instruction Tuning)
+  为不同检索任务添加指令前缀:
+    "Represent this query for document retrieval: {query}"
+    "Represent this document for search: {doc}"
+  → 同一模型支持多种检索场景
+
+Stage 3: 知识蒸馏 (可选)
+  用大的 Cross-Encoder 作为 Teacher
+  训练小的 Bi-Encoder 作为 Student
+  → 小模型也有好效果
+```
+
+### 10.2 主流 Embedding 模型对比 (2025)
+
+| 模型 | 维度 | 多语言 | MTEB 排名 | 特点 |
+|------|------|--------|-----------|------|
+| text-embedding-3-large | 3072 | ✅ | ~TOP 3 | OpenAI API, 支持维度截断 |
+| BGE-M3 | 1024 | ✅ | TOP 5 | 开源最强, Dense+Sparse+Multi-Vec |
+| E5-Mistral-7B | 4096 | ✅ | TOP 3 | 大模型 Embedding, 效果极好 |
+| Jina-Embeddings-v3 | 1024 | ✅ | TOP 10 | 8K 上下文, 多任务 |
+| GTE-Qwen2 | 1536 | ✅ | TOP 5 | 通义出品, 中文优秀 |
+| Cohere-embed-v3 | 1024 | ✅ | TOP 5 | API, 压缩友好 |
+| all-MiniLM-L6 | 384 | ❌ | ~TOP 50 | 轻量级, 适合 POC |
+
+### 10.3 Embedding 微调实践
+
+```python
+# 使用 sentence-transformers 微调 Embedding 模型
+from sentence_transformers import (
+    SentenceTransformer, InputExample, losses
+)
+from torch.utils.data import DataLoader
+
+# 加载基础模型
+model = SentenceTransformer("BAAI/bge-base-zh-v1.5")
+
+# 准备训练数据: (query, positive, negative)
+train_examples = [
+    InputExample(
+        texts=["什么是向量数据库？",
+               "向量数据库是专门存储和检索向量的数据库系统...",
+               "关系型数据库使用 SQL 进行数据查询..."]
+    ),
+    # ... 更多样本
+]
+
+train_dataloader = DataLoader(train_examples, shuffle=True, batch_size=16)
+
+# 对比学习损失
+train_loss = losses.TripletLoss(model=model)
+
+# 训练
+model.fit(
+    train_objectives=[(train_dataloader, train_loss)],
+    epochs=3,
+    warmup_steps=100,
+    output_path="./my-finetuned-embedding"
+)
+```
+
+
+---
+
+## 十一、向量数据库深度对比
+
+### 11.1 索引算法原理 🔴
+
+```
+HNSW (Hierarchical Navigable Small World):
+═══════════════════════════════════════════
+
+  构建: 多层图结构 (类似跳表)
+  
+  Layer 2 (稀疏):   A ───── D
+  Layer 1 (中等):   A ── B ── D ── F
+  Layer 0 (密集):   A─B─C─D─E─F─G─H
+  
+  搜索: 从最高层开始 → 贪心跳转 → 逐层下降 → 底层精细搜索
+  
+  核心参数:
+    M = 每个节点的最大连接数 (通常 16-64)
+    efConstruction = 构建时搜索宽度 (通常 200)
+    efSearch = 查询时搜索宽度 (通常 50-200)
+  
+  复杂度: O(log N) 搜索, O(N·M) 空间
+  优势: 高召回率, 无需训练, 增量更新
+  劣势: 内存占用大, 构建慢
+
+IVF (Inverted File Index):
+══════════════════════════
+
+  构建: K-Means 聚类 → N 个 Cluster
+  搜索: 找最近的 nprobe 个 Cluster → 在其中暴力搜索
+  
+  ┌─────────────────────────────────────────────┐
+  │  Cluster 1: [v1, v5, v8, v12]               │
+  │  Cluster 2: [v2, v6, v9, v15]    ← 搜这里  │
+  │  Cluster 3: [v3, v7, v11, v13]   ← 和这里  │
+  │  Cluster 4: [v4, v10, v14, v16]             │
+  └─────────────────────────────────────────────┘
+  
+  核心参数:
+    nlist = 聚类数 (通常 sqrt(N))
+    nprobe = 搜索时探查的聚类数 (nprobe ↑ → 召回 ↑, 速度 ↓)
+  
+  变体: IVF_FLAT, IVF_PQ, IVF_SQ8
+  优势: 内存效率高 (配合 PQ 压缩)
+  劣势: 需要训练, 难以增量更新
+
+DiskANN:
+════════
+  基于图的索引，数据存在 SSD 而非内存
+  → 支持十亿级向量, 内存占用极低
+  → 查询延迟比纯内存方案高 (ms vs μs)
+  → 适合海量数据 + 有限内存场景
+```
+
+### 11.2 向量数据库选型 🔴
+
+| 维度 | Milvus | Qdrant | Weaviate | Pinecone | pgvector |
+|------|--------|--------|----------|----------|----------|
+| 部署 | 自托管/云 | 自托管/云 | 自托管/云 | 纯云 | PostgreSQL 扩展 |
+| 性能 | ★★★★★ | ★★★★ | ★★★★ | ★★★★ | ★★★ |
+| 扩展性 | 分布式原生 | 分布式 | 分布式 | 自动扩展 | 单机 (可读副本) |
+| 索引 | HNSW/IVF/DiskANN | HNSW | HNSW | 专有 | IVFFlat/HNSW |
+| 混合搜索 | ✅ (BM25 + 向量) | ✅ (全文) | ✅ (BM25) | ✅ | ✅ (pg_trgm) |
+| 过滤 | 标量过滤 | 负载过滤 | GraphQL | 元数据 | SQL WHERE |
+| 多租户 | Partition Key | Collection | 多租户原生 | Namespace | Schema |
+| 数据量 | 十亿+ | 千万级 | 千万级 | 十亿+ | 百万级 |
+| 适用 | 大规模生产 | 中型+好用 | 开发友好 | 零运维 | 已有 PG |
+| 社区 | 最大 | 活跃 | 活跃 | N/A | PG 生态 |
+
+```
+选型决策:
+═════════
+  已有 PostgreSQL + 数据量 < 100 万?
+    → pgvector (零额外基础设施)
+  
+  不想运维 + 预算充足?
+    → Pinecone (全托管)
+  
+  中小规模 + 开发体验优先?
+    → Qdrant (Rust 实现, 轻量, API 好用)
+  
+  大规模生产 + 需要分布式?
+    → Milvus (久经考验, 十亿级)
+  
+  需要 GraphQL + 多模态?
+    → Weaviate
+```
+
+---
+
+## 十二、RAG 工程化最佳实践
+
+### 12.1 端到端 RAG Pipeline 设计
+
+```python
+# 生产级 RAG Pipeline 架构
+from dataclasses import dataclass
+from typing import List, Optional
+
+@dataclass
+class RAGConfig:
+    # 文档处理
+    chunk_size: int = 512
+    chunk_overlap: int = 50
+    
+    # 检索
+    top_k: int = 20           # 初始检索数量
+    rerank_top_k: int = 5     # 重排后保留数量
+    hybrid_alpha: float = 0.6  # 向量权重 (vs BM25)
+    
+    # 生成
+    max_context_tokens: int = 4000
+    temperature: float = 0.1
+
+class ProductionRAGPipeline:
+    def __init__(self, config: RAGConfig):
+        self.config = config
+        self.embedder = load_embedder("BAAI/bge-m3")
+        self.reranker = load_reranker("BAAI/bge-reranker-v2-m3")
+        self.vector_db = connect_milvus()
+        self.bm25_index = load_bm25_index()
+        self.llm = load_llm("gpt-4o")
+    
+    def query(self, user_query: str) -> str:
+        # Step 1: Query 优化
+        enhanced_queries = self.query_expansion(user_query)
+        
+        # Step 2: 混合检索
+        candidates = []
+        for q in enhanced_queries:
+            vector_results = self.vector_search(q, k=self.config.top_k)
+            bm25_results = self.bm25_search(q, k=self.config.top_k)
+            merged = self.rrf_fusion(vector_results, bm25_results)
+            candidates.extend(merged)
+        
+        # Step 3: 去重
+        candidates = self.deduplicate(candidates)
+        
+        # Step 4: Re-Ranking
+        reranked = self.reranker.rerank(
+            user_query, candidates, top_k=self.config.rerank_top_k
+        )
+        
+        # Step 5: Context 组装
+        context = self.build_context(
+            reranked, max_tokens=self.config.max_context_tokens
+        )
+        
+        # Step 6: LLM 生成
+        answer = self.llm.generate(
+            system_prompt=RAG_SYSTEM_PROMPT,
+            user_message=f"Context:\n{context}\n\nQuestion: {user_query}",
+            temperature=self.config.temperature,
+        )
+        
+        # Step 7: 引用提取
+        answer_with_citations = self.extract_citations(answer, reranked)
+        
+        return answer_with_citations
+```
+
+### 12.2 分块策略实验方法论
+
+| 策略 | chunk_size | overlap | 适用场景 | 优势 | 劣势 |
+|------|-----------|---------|---------|------|------|
+| 小块 | 128-256 | 20 | 精确事实问答 | 检索精准 | 缺乏上下文 |
+| 中块 | 512-768 | 50-100 | 通用场景 | 平衡 | 通用 |
+| 大块 | 1024-2048 | 200 | 需要上下文的场景 | 上下文完整 | 噪声多 |
+| 语义分块 | 动态 | 0 | 结构化文档 | 语义完整 | 分块不均 |
+| Parent-Child | 小检索大返回 | - | 最佳实践 | 两全其美 | 实现复杂 |
+
+```
+Parent-Child 分块策略:
+══════════════════════
+
+  Parent Chunk (1024 tokens): "第三章 向量数据库...HNSW 算法..."
+     │
+     ├── Child Chunk 1 (256): "HNSW 使用多层图结构..."
+     ├── Child Chunk 2 (256): "构建时的参数 M 和 ef..."
+     └── Child Chunk 3 (256): "HNSW 的搜索复杂度为..."
+  
+  检索时: 用 Child Chunk 匹配 (精准)
+  返回时: 给 LLM 整个 Parent Chunk (完整上下文)
+  → 兼顾检索精度和上下文完整性
+```
+
+### 12.3 RAG 可观测性
+
+```
+监控指标:
+══════════
+
+  检索层:
+  ├── 检索延迟 (p50/p95/p99)
+  ├── 检索召回率 (有标注数据时)
+  ├── 平均检索文档相关性分数
+  └── 空检索率 (无结果的查询比例)
+
+  生成层:
+  ├── 生成延迟 (TTFT / 总耗时)
+  ├── 答案忠实度 (是否基于检索内容)
+  ├── 答案完整性
+  └── 幻觉率
+
+  系统层:
+  ├── 端到端延迟
+  ├── QPS 和并发数
+  ├── 错误率
+  └── Token 消耗和成本
+
+  工具:
+  ├── LangSmith (LangChain 生态)
+  ├── Phoenix (Arize AI, 开源)
+  ├── Langfuse (开源)
+  └── Helicone (API 代理监控)
+```
+
+
+---
+
+## 十三、RAG 面试深度题库
+
+### 13.1 架构设计类
+
+**Q: RAG vs Fine-Tuning vs Long Context，三者怎么选？** 🔴
+
+> 三者的核心区别在于知识注入方式。RAG 适合：知识频繁更新、需要溯源引用、知识量大但查询精确。Fine-Tuning 适合：需要改变模型行为/风格、领域专业术语理解、固定不变的领域知识。Long Context 适合：知识量适中（<100K tokens）、需要全文理解（如合同审查）、不需要频繁更新。实际项目中，三者经常组合使用：Fine-Tune 基础模型让它更懂领域 → RAG 注入最新知识 → Long Context 处理复杂文档。关键决策因素：更新频率、知识量、是否需要引用、预算。
+
+**Q: 如何设计一个支持百万文档的 RAG 系统？** 🔴
+
+> 百万文档级 RAG 的核心挑战是索引效率和检索质量。架构上：(1) 离线流水线用分布式处理框架（如 Spark/Ray）做文档解析、分块、Embedding、索引写入；(2) 向量数据库选 Milvus 或 Qdrant（分布式部署），索引选 HNSW 或 IVF_PQ 视显存/质量权衡；(3) 在线链路做二级缓存——语义缓存高频查询结果、KV 缓存热门文档的 Embedding；(4) 分层检索——先 BM25 粗筛 → 向量精排 → Cross-Encoder 最终排序。还要考虑多租户隔离、增量索引更新、文档过期清理。成本估算：100 万个 1024 维 FP32 向量约 4GB 内存。
+
+**Q: Naive RAG 在生产中最常遇到的问题是什么？如何解决？** 🔴
+
+> 五个最常见问题：(1) 语义鸿沟——用户查询和文档表述不同，解决方案是 HyDE + Query Rewrite；(2) 检索不相关——Top-K 中掺杂噪声，解决方案是 Re-Ranking + 相关性过滤阈值；(3) Lost in the Middle——LLM 忽略长上下文中间的信息，解决方案是按相关性排序将最重要的放首尾；(4) 幻觉——LLM 编造未在检索结果中的信息，解决方案是强化 System Prompt + Citation 要求 + 答案验证；(5) 分块边界问题——关键信息被切分，解决方案是 Parent-Child Chunk + 合理 overlap。
+
+### 13.2 技术细节类
+
+**Q: 为什么需要 Re-Ranking？Bi-Encoder 和 Cross-Encoder 的区别？** 🔴
+
+> Bi-Encoder（如 BGE-M3）独立编码 Query 和 Document，通过向量相似度快速匹配。优点是可以预计算文档向量，检索时只需计算 Query 向量和 ANN 搜索，毫秒级响应。缺点是 Q 和 D 之间没有交叉注意力，语义理解不够深。Cross-Encoder（如 BGE-Reranker）将 Q 和 D 拼接后一起输入模型，token 级别的交叉注意力能捕捉更细粒度的语义关系，但每个 (Q,D) 对都需要独立前向传播，O(N) 复杂度无法用于全量检索。因此工业实践中用 Bi-Encoder 粗排 + Cross-Encoder 精排的两阶段架构。
+
+**Q: BM25 和向量检索各自的优势场景是什么？为什么混合搜索效果更好？** 🔴
+
+> BM25 基于词频统计，擅长精确关键词匹配（如错误码 "E1001"、人名 "张三"、专有名词 "HDFS"）。向量检索基于语义相似度，擅长理解同义词和语义关系（"如何减少内存使用" ≈ "memory optimization"）。两者互补——BM25 覆盖向量检索遗漏的精确匹配，向量覆盖 BM25 遗漏的语义匹配。融合方式首选 RRF（Reciprocal Rank Fusion），简单无超参；也可以用线性加权但需要调 α。Milvus 2.4+ 和 Qdrant 都原生支持混合搜索。
+
+**Q: Embedding 维度怎么选？高维和低维各有什么影响？** 🟡
+
+> 维度直接影响三个方面：(1) 表达力——高维（1024-3072）能编码更丰富的语义信息，检索精度更高；(2) 存储和计算——100 万个 3072 维 FP32 向量约 12GB，而 384 维只需 1.5GB；(3) 检索速度——高维向量的距离计算更慢。实际选择：PoC 阶段用 384 维小模型快速验证；生产环境用 768-1024 维是甜蜜点；对精度极致要求且资源充足时用 1536-3072。Matryoshka Embedding（如 text-embedding-3-large）支持按需截断维度，同一个模型可以输出 256/512/1024/3072，实现灵活的精度-成本权衡。
+
+### 13.3 工程实践类
+
+**Q: 如何评估 RAG 系统？用什么指标？** 🔴
+
+> RAG 评估需要分层：
+> - **检索层**：Recall@K（前 K 个结果中包含正确答案的比例）、MRR（第一个正确结果的排名倒数）、NDCG（考虑排名的综合评分）
+> - **生成层**：Faithfulness（答案是否忠于检索内容）、Answer Relevancy（答案是否回答了问题）、Answer Completeness（答案是否完整覆盖）
+> - **端到端**：用户满意度、延迟、成本
+>
+> 工具选择：RAGAS 是最主流的 RAG 评估框架，提供 Faithfulness/Context Relevancy/Answer Relevancy 等自动化指标（用 LLM-as-Judge）。也可以用 DeepEval、TruLens。建议同时维护一个人工标注的 Golden Set（100-500 条），每次迭代跑一遍看回归。
+
+**Q: RAG 系统的延迟优化有哪些手段？** 🟡
+
+> 端到端延迟分解：
+> - **Embedding 延迟**（10-50ms）：本地部署 GPU 推理 < 10ms；用 ONNX Runtime 加速；批量处理
+> - **检索延迟**（5-50ms）：HNSW 配置合理的 efSearch；使用 SSD 而非网络存储；预热索引到内存
+> - **Re-Ranking 延迟**（50-200ms）：限制候选数量（Top-20 → Top-5）；用轻量 Reranker
+> - **LLM 延迟**（200-2000ms）：选合适大小的模型；流式输出减少感知延迟；Speculative Decoding
+> - **总优化**：语义缓存命中则跳过全部；异步预检索；Context 压缩减少 Token 数
+
+**Q: 如何处理 RAG 中的表格和图片？** 🟡
+
+> 表格处理三种方案：(1) 转为 Markdown 纯文本 → 简单但丢失结构；(2) 结构化提取为 JSON/DataFrame → 支持精确查询但需要好的解析器；(3) 表格问答方案——将表格和问题一起给 LLM，让它写 SQL/Pandas 代码查询。图片处理：(1) OCR + 描述 → 转为文本索引；(2) CLIP/SigLIP 编码 → 多模态向量索引；(3) ColPali 直接编码文档页面截图 → 最新最简方案。PDF 表格推荐用 Unstructured.io 或 LlamaParse（收费但效果好）。
+
+---
+
+## 十四、RAG 前沿技术趋势 (2025)
+
+### 14.1 技术趋势概览
+
+| 趋势 | 说明 | 代表工作 |
+|------|------|----------|
+| Agentic RAG | Agent 主导的自适应检索 | LangGraph, CrewAI |
+| Multi-Modal RAG | 图文视频混合检索生成 | ColPali, LlamaIndex |
+| Graph RAG | 知识图谱增强 RAG | Microsoft GraphRAG |
+| Late Chunking | 延迟分块保留完整语境 | Jina AI |
+| Structured RAG | 结构化数据 RAG (SQL/API) | LlamaIndex, Vanna |
+| RAG-as-a-Service | 一站式 RAG 平台 | Cohere, Together AI |
+| Self-Improving RAG | 自动优化检索策略 | DSPy, TextGrad |
+
+### 14.2 Late Chunking 详解 🟢
+
+```
+传统分块的问题:
+═══════════════
+  "他在 2020 年创立了这家公司" ← Chunk 3
+  
+  问: "谁创立了 XX 公司？"
+  → Chunk 3 被检索到，但 "他" 指代谁？
+  → 上下文丢失! (代词消解失败)
+
+Late Chunking 方案:
+  1. 先将整个文档通过长上下文 Embedding 模型编码
+     → 每个 token 都有全文档上下文的表示
+  2. 编码完成后再按位置分块
+     → 每个 chunk 的向量包含了全文档语义
+  3. "他" 的向量已经融入了 "张三" 的信息
+
+  传统: 分块 → Embed(各块独立)
+  Late: Embed(全文) → 分块(取对应位置的表示)
+```
+
+### 14.3 DSPy 自动优化 RAG 🟢
+
+```
+DSPy 核心思想:
+═══════════════
+  不手写 Prompt → 用程序化方式定义 RAG 模块
+  → 自动优化 Prompt 和模块参数
+
+  传统:
+    prompt = "你是一个问答助手，请根据以下上下文回答..."
+    → 手工调 Prompt，玄学
+
+  DSPy:
+    class RAG(dspy.Module):
+        def __init__(self):
+            self.retrieve = dspy.Retrieve(k=5)
+            self.generate = dspy.ChainOfThought("context, question -> answer")
+        
+        def forward(self, question):
+            context = self.retrieve(question).passages
+            return self.generate(context=context, question=question)
+    
+    # 自动优化
+    optimizer = dspy.BootstrapFewShotWithRandomSearch(
+        metric=answer_correctness, max_bootstrapped_demos=4
+    )
+    optimized_rag = optimizer.compile(RAG(), trainset=train_data)
+
+  → 自动搜索最优的 Few-Shot 示例和 Prompt 模板
+  → 可复现，可版本管理
+```
+
+---
+
+## 附录 B：RAG 系统 Checklist
+
+### 上线前检查清单
+
+| 类别 | 检查项 | 状态 |
+|------|--------|------|
+| 数据 | 文档解析覆盖所有格式 | ☐ |
+| 数据 | 分块策略经过实验验证 | ☐ |
+| 数据 | 元数据提取完整 (来源/时间/标题) | ☐ |
+| 检索 | 混合检索 (向量+BM25) | ☐ |
+| 检索 | Re-Ranking 已部署 | ☐ |
+| 检索 | 相关性阈值已调优 | ☐ |
+| 生成 | System Prompt 包含引用要求 | ☐ |
+| 生成 | 幻觉检测机制 | ☐ |
+| 生成 | 无法回答时的 Fallback 策略 | ☐ |
+| 评估 | Golden Set 已建立 (≥100条) | ☐ |
+| 评估 | RAGAS 自动评估流水线 | ☐ |
+| 监控 | 延迟、错误率、Token 消耗 | ☐ |
+| 监控 | 用户反馈收集机制 | ☐ |
+| 安全 | Prompt Injection 防护 | ☐ |
+| 安全 | PII 过滤 | ☐ |
+| 成本 | 语义缓存已启用 | ☐ |
+| 成本 | 成本监控和告警 | ☐ |
+
+### RAG 优化迭代循环
+
+```
+  ┌─── 持续优化循环 ───────────────────────────┐
+  │                                              │
+  │  收集反馈 → 分析 Bad Case → 定位问题环节    │
+  │                                │             │
+  │         ┌──────────────────────┼──────┐      │
+  │         │                      │      │      │
+  │     检索问题             生成问题   数据问题  │
+  │     ├ Query优化          ├ Prompt调优  ├ 补充文档│
+  │     ├ Re-Ranking          ├ 换模型     ├ 改分块  │
+  │     └ 增加数据源          └ 加约束     └ 修元数据│
+  │                                │             │
+  │         评估指标对比 ← 实施改进              │
+  │              │                               │
+  │         效果提升? ──Yes── 部署上线           │
+  │              │                               │
+  │           No ─── 继续迭代                    │
+  └──────────────────────────────────────────────┘
+```
+
+
+---
+
+## 十五、RAG 与 LLM 协作模式
+
+### 15.1 Context Window 管理策略 🔴
+
+```
+上下文窗口有限，如何最大化利用？
+══════════════════════════════════
+
+问题: GPT-4 128K 上下文看似很大，但:
+  - System Prompt: 500-2000 tokens
+  - 对话历史: 1000-5000 tokens
+  - 检索上下文: ? tokens
+  - 输出预留: 500-2000 tokens
+  → 实际留给检索的空间: 可能只有 4K-8K
+
+策略 1: Context Compression (上下文压缩)
+  对检索到的文档片段进行摘要/提取
+  → 5 个 500 token 片段 → 压缩为 1000 tokens
+  工具: LLMLingua, LangChain ContextualCompressionRetriever
+
+策略 2: Lost in the Middle 优化
+  研究发现 LLM 更关注上下文的开头和结尾
+  → 将最相关的文档放在开头和结尾
+  → 次要的放中间
+
+策略 3: 分级上下文
+  第一层: 最相关的 2-3 个片段 (完整)
+  第二层: 次相关的摘要 (压缩)
+  第三层: 补充信息的关键句 (提取)
+
+策略 4: 迭代检索
+  第一轮: 粗粒度检索 → 初步回答
+  第二轮: 根据初步回答中的不确定点 → 精确检索 → 完善回答
+```
+
+### 15.2 Prompt Engineering for RAG
+
+```
+RAG System Prompt 模板:
+═══════════════════════
+
+你是一个专业的问答助手。请严格基于以下检索到的上下文回答用户问题。
+
+规则:
+1. 只使用提供的上下文中的信息回答
+2. 如果上下文不包含回答问题所需的信息，明确说"根据已有信息无法回答"
+3. 不要编造任何不在上下文中的信息
+4. 在回答末尾标注引用来源 [来源: 文档名称]
+5. 如果不同文档的信息有冲突，指出冲突并说明各自来源
+
+上下文:
+---
+{context}
+---
+
+关键设计点:
+─────────────
+1. 明确限制只用检索内容 → 降低幻觉
+2. 要求标注引用 → 可溯源，方便验证
+3. 无法回答时的退出机制 → 比乱答好
+4. 冲突处理指导 → 多源知识可能矛盾
+```
+
+### 15.3 Citation 和源溯源 🟡
+
+```
+引用实现方案:
+═════════════
+
+方案 1: 内联引用 (Inline Citation)
+  "向量数据库使用 HNSW 算法进行高效近似搜索 [1]。"
+  [1] 来源: vector_db_guide.pdf, 第 3 章
+  
+  实现: System Prompt 中要求 LLM 在回答中标注 [N]
+  后处理: 正则提取 [N] → 映射到检索源
+
+方案 2: 语句级验证 (Sentence-Level Verification)
+  对生成的每个句子，检查是否有检索依据
+  → 有依据: 标注为 ✅ 可信
+  → 无依据: 标注为 ⚠️ 未验证
+  → 与依据矛盾: 标注为 ❌ 可能错误
+
+方案 3: 高亮引用 (Highlight Citation)
+  不仅标注文档来源，还标注具体段落/句子
+  UI 上可以点击引用跳转到原文
+  实现: 在检索时记录 chunk 的精确位置信息
+```
+
+---
+
+## 十六、RAG 安全与对抗
+
+### 16.1 RAG 特有的安全风险
+
+| 风险类型 | 说明 | 防御措施 |
+|---------|------|----------|
+| 知识库投毒 | 恶意文档混入知识库 | 文档审核 + 来源白名单 |
+| Prompt Injection via Context | 检索到的文档包含注入指令 | 上下文清洗 + 分隔符隔离 |
+| 信息泄露 | 检索到不该暴露的文档 | 权限控制 + 文档级 ACL |
+| PII 泄露 | 检索结果含个人信息 | PII 检测 + 脱敏处理 |
+| 数据跨域 | 多租户检索到其他租户数据 | Partition Key + 过滤 |
+
+### 16.2 权限控制设计
+
+```
+文档级权限控制:
+═══════════════
+
+  索引时:
+  每个 chunk 附带元数据:
+  {
+    "content": "...",
+    "metadata": {
+      "source": "financial_report_2024.pdf",
+      "department": "finance",
+      "access_level": "confidential",
+      "allowed_roles": ["finance_team", "c_suite"],
+      "created_at": "2024-01-15"
+    }
+  }
+
+  检索时:
+  向量检索 + 元数据过滤
+  filter = {
+    "access_level": {"$in": user.access_levels},
+    "allowed_roles": {"$in": user.roles},
+    "department": {"$in": user.visible_departments}
+  }
+
+  → 即使向量相似度高，权限不匹配也不返回
+  → 需要在向量数据库层面支持过滤 (Milvus/Qdrant 都支持)
+```
+
+---
+
+## 十七、RAG 成本优化
+
+### 17.1 成本分析
+
+```
+RAG 系统成本构成:
+═══════════════════
+
+  离线成本 (一次性 + 增量):
+  ├── Embedding 计算: $0.02-0.13 / 1M tokens (API)
+  │   或 GPU 自建: ~$0.5/hour
+  ├── 向量存储: ~$10-50/month (100万向量)
+  └── 文档解析: 按文档量和复杂度
+
+  在线成本 (按查询):
+  ├── Query Embedding: ~$0.0001/query
+  ├── 向量检索: ~$0.00001/query (自建)
+  ├── Re-Ranking: ~$0.001/query (API)
+  └── LLM 生成: $0.01-0.1/query (主要成本!)
+
+  示例: 日均 10K 查询
+  LLM (GPT-4o): ~$300-1000/月 ← 大头
+  Embedding:    ~$10/月
+  向量DB:       ~$50/月
+  Re-Ranking:   ~$30/月
+  总计:         ~$400-1100/月
+```
+
+### 17.2 成本优化策略
+
+| 策略 | 预期节省 | 实现难度 | 说明 |
+|------|---------|---------|------|
+| 语义缓存 | 30-60% | 中 | 相似查询直接返回缓存答案 |
+| 小模型路由 | 40-60% | 中 | 简单查询用小模型，复杂才用大模型 |
+| Context 压缩 | 20-30% | 低 | 减少送给 LLM 的 token 数 |
+| 批量处理 | 10-20% | 低 | 聚合相似查询批量处理 |
+| 自建模型 | 50-80% | 高 | 用开源模型替代 API |
+| Prompt 优化 | 10-20% | 低 | 精简 System Prompt |
+
+```
+语义缓存实现:
+═══════════════
+
+  新查询 → Embed → 在缓存向量库中搜索
+                     │
+              相似度 > 0.95?  ← 阈值可调
+                │          │
+              Yes         No
+                │          │
+          返回缓存答案   正常 RAG 流程
+                          │
+                    结果写入缓存
+
+  工具: GPTCache, Redis + 向量插件
+  注意: 缓存需要设置 TTL，知识更新时需要失效
+```
+
+---
+
+## 附录 C：RAG 技术演进时间线
+
+```
+2020  RAG 原始论文 (Meta/Facebook) — 开创 RAG 范式
+  │
+2021  Retrieval-Enhanced Transformer — 检索增强预训练
+  │
+2022  LangChain 发布 — RAG 框架化, 降低门槛
+  │   LlamaIndex 发布 — 专注 RAG 的框架
+  │
+2023  向量数据库热潮 (Pinecone B轮, Qdrant, Weaviate)
+  │   Self-RAG 论文 — 自适应检索
+  │   RAGAS 评估框架 — 标准化评估
+  │   BGE/E5 系列 — 开源 Embedding 模型崛起
+  │   Lost in the Middle — 长上下文陷阱被发现
+  │
+2024  Graph RAG (Microsoft) — 知识图谱增强
+  │   CRAG — 纠错检索
+  │   Agentic RAG — Agent 驱动的自适应 RAG
+  │   ColPali — 多模态文档检索
+  │   Late Chunking — 延迟分块技术
+  │   BGE-M3 — Dense+Sparse+Multi-Vec 统一
+  │
+2025  RAG + Agent 深度融合
+  │   自动化 RAG 优化 (DSPy/TextGrad)
+  │   长上下文模型挑战 RAG 的必要性
+  │   多模态 RAG 成熟
+  └──▶ ...
+```
+
+> 📌 **总结**：RAG 是当前最实用的 LLM 知识增强方案，没有之一。掌握好检索质量优化（混合搜索 + Re-Ranking）、Embedding 选型、分块策略这三板斧，就能解决 80% 的 RAG 问题。面试中重点关注 RAG vs Fine-Tuning 的决策、Re-Ranking 原理、混合检索融合策略。
+
+
+---
+
+## 十八、RAG 完整代码示例
+
+### 18.1 最小可用 RAG (LangChain)
+
+```python
+# 最简 RAG Pipeline - 50 行搞定
+from langchain_community.document_loaders import DirectoryLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+
+# 1. 加载文档
+loader = DirectoryLoader("./docs", glob="**/*.md")
+docs = loader.load()
+
+# 2. 分块
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=500, chunk_overlap=50
+)
+chunks = splitter.split_documents(docs)
+
+# 3. 向量化 + 索引
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+vectorstore = FAISS.from_documents(chunks, embeddings)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+
+# 4. 生成链
+prompt = ChatPromptTemplate.from_template(
+    "基于以下上下文回答问题。如果无法回答请说不知道。\n\n"
+    "上下文: {context}\n\n问题: {question}"
+)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
+
+rag_chain = (
+    {"context": retriever, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+# 5. 使用
+answer = rag_chain.invoke("什么是向量数据库？")
+print(answer)
+```
+
+### 18.2 生产级 RAG (混合检索 + Re-Ranking)
+
+```python
+# 生产级 RAG Pipeline
+from langchain_community.vectorstores import Milvus
+from langchain_community.retrievers import BM25Retriever
+from langchain.retrievers import EnsembleRetriever
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain.retrievers.document_compressors import CrossEncoderReranker
+from langchain.retrievers import ContextualCompressionRetriever
+
+# 向量检索器
+vector_retriever = Milvus(
+    embedding_function=embeddings,
+    connection_args={"host": "localhost", "port": "19530"},
+    collection_name="my_docs",
+).as_retriever(search_kwargs={"k": 20})
+
+# BM25 检索器
+bm25_retriever = BM25Retriever.from_documents(chunks)
+bm25_retriever.k = 20
+
+# 混合检索 (RRF 融合)
+ensemble_retriever = EnsembleRetriever(
+    retrievers=[vector_retriever, bm25_retriever],
+    weights=[0.6, 0.4],  # 向量权重略高
+)
+
+# Re-Ranking
+cross_encoder = HuggingFaceCrossEncoder(
+    model_name="BAAI/bge-reranker-v2-m3"
+)
+reranker = CrossEncoderReranker(
+    model=cross_encoder, top_n=5
+)
+
+# 最终检索器: 混合检索 + Re-Ranking
+final_retriever = ContextualCompressionRetriever(
+    base_compressor=reranker,
+    base_retriever=ensemble_retriever,
+)
+
+# 构建 RAG Chain (同上)
+rag_chain = (
+    {"context": final_retriever, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+```
+
+### 18.3 Agentic RAG (LangGraph)
+
+```python
+# Agentic RAG with LangGraph
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, List
+
+class RAGState(TypedDict):
+    question: str
+    documents: List[str]
+    generation: str
+    retry_count: int
+
+def retrieve(state: RAGState) -> RAGState:
+    # 检索文档
+    docs = final_retriever.invoke(state["question"])
+    return {"documents": [d.page_content for d in docs]}
+
+def grade_documents(state: RAGState) -> str:
+    # 评估检索质量
+    relevant = evaluate_relevance(state["question"], state["documents"])
+    if relevant:
+        return "generate"
+    elif state.get("retry_count", 0) < 2:
+        return "rewrite_query"
+    else:
+        return "generate"  # 超过重试次数，勉强生成
+
+def rewrite_query(state: RAGState) -> RAGState:
+    # 重写查询
+    new_query = llm.invoke(
+        f"请重写以下查询以获得更好的搜索结果: {state['question']}"
+    )
+    return {
+        "question": new_query.content,
+        "retry_count": state.get("retry_count", 0) + 1
+    }
+
+def generate(state: RAGState) -> RAGState:
+    # 生成答案
+    context = "\n".join(state["documents"])
+    answer = rag_chain.invoke(state["question"])
+    return {"generation": answer}
+
+def check_hallucination(state: RAGState) -> str:
+    # 检查幻觉
+    is_grounded = verify_grounding(state["generation"], state["documents"])
+    return "end" if is_grounded else "regenerate"
+
+# 构建状态图
+workflow = StateGraph(RAGState)
+workflow.add_node("retrieve", retrieve)
+workflow.add_node("rewrite_query", rewrite_query)
+workflow.add_node("generate", generate)
+
+workflow.set_entry_point("retrieve")
+workflow.add_conditional_edges("retrieve", grade_documents)
+workflow.add_edge("rewrite_query", "retrieve")
+workflow.add_conditional_edges("generate", check_hallucination)
+workflow.add_edge("end", END)
+
+app = workflow.compile()
+result = app.invoke({"question": "什么是 RAG？", "retry_count": 0})
+```
+
+---
+
+## 附录 D：RAG 常见问题排查
+
+| 症状 | 可能原因 | 排查方法 |
+|------|---------|----------|
+| 检索不到相关文档 | Embedding 模型不适合 | 换模型; 试 BM25 看是否能找到 |
+| 检索到但答案不对 | Context 被忽略 | 检查 Prompt; Lost-in-Middle 重排 |
+| 回答有幻觉 | Prompt 约束不够 | 加强"只用上下文"限制; 加 Citation 要求 |
+| 延迟太高 | Re-Ranking/LLM 慢 | 减少 Top-K; 换轻量 Reranker; 用缓存 |
+| 分块质量差 | 文档解析问题 | 检查 PDF 解析; 调整 chunk_size |
+| 表格内容丢失 | 解析器不支持表格 | 用 LlamaParse/Unstructured.io |
+| 多语言效果差 | Embedding 不支持多语言 | 换 BGE-M3 或 multilingual-e5 |
+| 更新后检索旧内容 | 索引未更新 | 增量索引机制; 缓存失效策略 |
+| 不同用户看到相同结果 | 无权限过滤 | 加 metadata filter |
+| 成本过高 | LLM 调用太多 | 语义缓存; 小模型路由; 压缩上下文 |
+
+---
+
+## 附录 E：RAG 框架生态对比
+
+| 框架 | 定位 | 特点 | 适用 |
+|------|------|------|------|
+| LangChain | 通用 LLM 应用框架 | 组件最丰富, 社区最大 | 快速开发, 通用 RAG |
+| LlamaIndex | 专注 RAG/数据 | 数据连接器多, 索引类型丰富 | 复杂 RAG, 结构化数据 |
+| LangGraph | Agent 工作流 | 状态图, 多 Agent | Agentic RAG |
+| Haystack | 生产级 NLP Pipeline | 模块化, MLOps 友好 | 企业级 RAG |
+| DSPy | 自动优化 | 程序化 Prompt 优化 | 极致效果 |
+| Verba | 一键部署 | Weaviate 生态, GUI | 快速 PoC |
+| RAGFlow | 开源 RAG 平台 | 文档解析强, 中文友好 | 企业知识库 |
+
+
+---
+
+## 附录 F：Embedding 性能基准参考
+
+### MTEB 中文检索排行 (2025 Q1)
+
+| 模型 | 维度 | 参数量 | 中文检索 nDCG@10 | 速度(tokens/s) | 说明 |
+|------|------|--------|------------------|---------------|------|
+| BGE-M3 | 1024 | 568M | 71.2 | 3000 | 全能选手, Dense+Sparse |
+| GTE-Qwen2-7B | 3584 | 7.6B | 72.8 | 800 | 大模型Embedding, 效果顶 |
+| text-embedding-3-large | 3072 | 未知 | 70.5 | API | OpenAI, 维度可调 |
+| BGE-large-zh-v1.5 | 1024 | 326M | 68.3 | 4500 | 中文首选, 轻量 |
+| E5-Mistral-7B | 4096 | 7B | 71.5 | 600 | 大模型, 英文更强 |
+| Jina-v3 | 1024 | 570M | 69.8 | 3200 | 8K上下文, 多任务 |
+| all-MiniLM-L6 | 384 | 22M | 55.2 | 15000 | 速度快, 效果一般 |
+
+> 注: 数据来源于 MTEB Leaderboard 和各模型技术报告，实际表现受数据集和评测条件影响。
+
+### 向量数据库性能基准 (100万 1024维向量)
+
+| 数据库 | 索引构建 | QPS (单机) | Recall@10 | 内存占用 | 说明 |
+|--------|---------|-----------|-----------|---------|------|
+| Milvus (HNSW) | 15min | 5000 | 0.99 | 4.5GB | 分布式可线性扩展 |
+| Qdrant (HNSW) | 12min | 4500 | 0.99 | 4.2GB | Rust 实现, 轻量 |
+| Weaviate (HNSW) | 18min | 3800 | 0.98 | 5.0GB | 多模态友好 |
+| pgvector (HNSW) | 25min | 800 | 0.97 | 6.5GB | PG 生态, 单机 |
+| FAISS (IVF_PQ) | 5min | 12000 | 0.95 | 0.8GB | 内存效率极高 |
+| FAISS (HNSW) | 10min | 8000 | 0.99 | 4.0GB | 纯内存, 速度快 |
+
+> 注: 数据为近似参考值。实际性能受硬件、配置参数、数据分布等因素影响。
+
+---
+
+## 附录 G：RAG 术语表
+
+| 术语 | 英文 | 说明 |
+|------|------|------|
+| 检索增强生成 | Retrieval-Augmented Generation | 结合外部知识检索的 LLM 生成方法 |
+| 向量嵌入 | Vector Embedding | 将文本/图像编码为稠密向量表示 |
+| 近似最近邻 | Approximate Nearest Neighbor (ANN) | 高效的向量相似度搜索算法 |
+| 混合搜索 | Hybrid Search | 结合向量搜索和关键词搜索 |
+| 重排序 | Re-Ranking | 用精排模型对粗排结果重新排序 |
+| 分块 | Chunking | 将长文档切分为短片段 |
+| 幻觉 | Hallucination | LLM 生成不基于事实的内容 |
+| 忠实度 | Faithfulness | 答案对检索上下文的忠实程度 |
+| 语义缓存 | Semantic Cache | 基于语义相似度的查询结果缓存 |
+| 知识图谱RAG | Graph RAG | 结合知识图谱的 RAG 方案 |
+| 延迟分块 | Late Chunking | 先编码全文再分块的技术 |
+| 跨编码器 | Cross-Encoder | Q和D联合编码的精排模型 |
+| 双编码器 | Bi-Encoder | Q和D独立编码的检索模型 |
+| 倒排索引 | Inverted Index | BM25等关键词搜索使用的索引结构 |
+| 查询改写 | Query Rewriting | 优化用户查询以提升检索效果 |
+| 假设文档嵌入 | HyDE | 用LLM生成假设答案来检索的技术 |
+| 多查询扩展 | Multi-Query Expansion | 一个查询扩展为多个角度 |
+| 上下文压缩 | Context Compression | 压缩检索上下文以节省token |
+| 引用溯源 | Citation/Attribution | 标注答案中信息的来源 |
+| 负载均衡 | Load Balancing | 分布式向量数据库的请求分发 |
+| 分区键 | Partition Key | 多租户数据隔离的键值 |
+
+---
+
+> 📌 本文档持续更新，覆盖 RAG 技术栈从理论到生产的完整链路。
+
+---
+
+## 附录 H：RAG 技术选型快速决策卡
+
+### Embedding 模型选型
+
+```
+你的场景是什么？
+─────────────────
+  中文为主 + 需要开源?
+    → BGE-M3 (首选) 或 BGE-large-zh-v1.5 (轻量)
+  
+  英文为主 + 需要开源?
+    → E5-Mistral-7B (效果最好) 或 GTE-large (轻量)
+  
+  多语言 + 预算充足?
+    → text-embedding-3-large (OpenAI API)
+  
+  需要极致速度 + 效果可接受?
+    → all-MiniLM-L6-v2 (22M 参数, 飞快)
+  
+  需要 Dense + Sparse 同时?
+    → BGE-M3 (唯一同时支持三种检索模式)
+```
+
+### 分块策略选型
+
+```
+你的文档类型?
+─────────────────
+  结构化文档 (技术文档/Wiki)?
+    → 按标题层级分块 + Parent-Child
+  
+  非结构化长文本 (报告/论文)?
+    → RecursiveCharacterTextSplitter (512, overlap=50)
+  
+  代码文件?
+    → 按函数/类分块 (AST 解析)
+  
+  FAQ/问答对?
+    → 每个 QA 一个 chunk (不分块)
+  
+  混合文档?
+    → 先分类再分块, 不同类型不同策略
+```
+
+### 检索策略选型
+
+```
+你的检索需求?
+─────────────────
+  基础场景 + 快速上线?
+    → 纯向量检索 + Top-5 → LLM 生成
+  
+  需要精确关键词匹配?
+    → 混合检索 (向量 + BM25) + RRF 融合
+  
+  对质量要求高?
+    → 混合检索 + Cross-Encoder Re-Ranking
+  
+  复杂多步问题?
+    → Agentic RAG (LangGraph) + 自适应检索
+  
+  跨文档全局摘要?
+    → Graph RAG (但成本高)
+```
+
+### 成本级别参考
+
+| 方案 | 月成本 (10K 查询/天) | 适用 |
+|------|---------------------|------|
+| 全 API (OpenAI) | $500-1500 | 快速上线, 小团队 |
+| 混合 (开源 Embed + API LLM) | $200-500 | 节省 Embed 成本 |
+| 全自建 (开源模型 + GPU) | $100-300 + GPU租赁 | 数据敏感, 大规模 |
+| 全自建 + 缓存优化 | $50-150 + GPU租赁 | 极致成本优化 |
+
+
+---
+
+> 本文档共覆盖 RAG 技术栈 18 个核心章节和 8 个附录，从架构原理到生产实践的完整链路。适合作为 RAG 学习和面试的一站式参考。持续更新中。
+
+---
+
+
+
+
+
